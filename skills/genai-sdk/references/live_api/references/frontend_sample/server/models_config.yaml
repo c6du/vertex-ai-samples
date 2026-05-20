@@ -1,0 +1,18 @@
+# Per-backend list of model ids surfaced in the UI's model dropdown.
+#
+# Only the public Vertex Live API path is supported in this reference build
+# (the internal `beyond` / `groot` backends are excluded). Add or edit entries
+# here and restart the server to pick them up.
+#
+# Each entry has:
+#   label: free-form display label shown in the dropdown.
+#   value: bare model id; the UI prepends
+#          projects/{project}/locations/{location}/publishers/google/models/
+#          before sending it on the wire.
+websocket:
+  - label: "Gemini 2.5 Flash native audio (preview)"
+    value: "gemini-2.5-flash-preview-native-audio-dialog"
+  - label: "Gemini 2.0 Flash live (preview)"
+    value: "gemini-2.0-flash-live-preview-04-09"
+  - label: "Gemini 2.5 Flash live"
+    value: "gemini-live-2.5-flash"

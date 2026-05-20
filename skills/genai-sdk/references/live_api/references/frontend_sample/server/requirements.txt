@@ -1,0 +1,8 @@
+tornado>=6.4
+protobuf>=5.27
+grpcio-tools>=1.65  # ships protoc and protoc-gen-python; used by codegen.sh
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+google-cloud-aiplatform>=1.60
+websockets>=12.0
+PyYAML>=6.0

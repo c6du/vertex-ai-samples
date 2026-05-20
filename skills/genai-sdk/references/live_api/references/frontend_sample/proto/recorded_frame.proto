@@ -1,0 +1,61 @@
+// Portable file format for recorded Live API sessions.
+//
+// Replaces the internal google3 `recordio` format with a self-describing,
+// language-portable wrapper. Each record on disk is:
+//
+//     [4-byte big-endian uint32 length][N-byte serialized RecordedFrame]
+//
+// repeated for as many frames as were captured in the session.
+//
+// A `RecordedFrame.payload` is a binary-serialized `ClientMessage` or
+// `ServerMessage` (see ../client_server_messages.proto) depending on
+// `direction`. The recording is a faithful packet capture of the
+// browser <-> server WebSocket dialogue; replaying it requires only the
+// reconstructed Live API protos.
+
+syntax = "proto3";
+
+package live_api.recording;
+
+message RecordedFrame {
+  enum Direction {
+    DIRECTION_UNSPECIFIED = 0;
+    // Frame originated at the browser; payload is a ClientMessage.
+    CLIENT_TO_SERVER = 1;
+    // Frame originated at the Live API server; payload is a ServerMessage.
+    SERVER_TO_CLIENT = 2;
+  }
+
+  // Unix-epoch milliseconds when the frame was observed at the proxy server.
+  int64 timestamp_ms = 1;
+
+  Direction direction = 2;
+
+  // Serialized ClientMessage / ServerMessage, in proto binary form.
+  // (Stored as bytes rather than `Any` to avoid pulling the full Live API
+  // schema into the recording schema; readers parse based on `direction`.)
+  bytes payload = 3;
+}
+
+// Optional file header. Written once at the start of every recording so
+// readers can detect format mismatches.
+//
+// On-disk layout (when present): exactly the same length-prefixed-record
+// framing as RecordedFrame, but the very first record in the file is a
+// FileHeader instead of a RecordedFrame. Readers detect this by attempting
+// to parse the first record as FileHeader; if `magic == "LIVEREC1"` it's a
+// header, otherwise treat it as a plain RecordedFrame (older files).
+message FileHeader {
+  // Must be the literal byte string "LIVEREC1".
+  string magic = 1;
+
+  // Format version. Current version: 1.
+  int32 version = 2;
+
+  // Unix-epoch milliseconds when the recording started.
+  int64 started_at_ms = 3;
+
+  // Free-form metadata that the writer wants to attach (e.g. model name,
+  // server build, frontend version). Optional.
+  map<string, string> metadata = 4;
+}

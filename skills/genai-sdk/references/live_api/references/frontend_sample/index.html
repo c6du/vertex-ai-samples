@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live API Playground</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app app-with-sidebar">
+      <!-- ============================== Sidebar =========================== -->
+      <nav class="app-sidebar" aria-label="Page navigation">
+        <div class="sidebar-brand">
+          <div class="brand-mark"></div>
+          <div class="sidebar-brand-text">Live API</div>
+        </div>
+        <ul class="sidebar-nav">
+          <li>
+            <button type="button" class="sidebar-item is-active" data-page="chat">
+              <span class="sidebar-icon" aria-hidden="true">CHAT</span>
+              <span class="sidebar-label">Chat</span>
+            </button>
+          </li>
+          <li>
+            <button type="button" class="sidebar-item" data-page="recording">
+              <span class="sidebar-icon" aria-hidden="true">REC</span>
+              <span class="sidebar-label">Recordings</span>
+            </button>
+          </li>
+        </ul>
+      </nav>
+
+      <!-- ============================== Page: Chat ======================== -->
+      <div class="app-page" id="page-chat">
+        <header class="app-header">
+          <div class="brand">
+            <div class="brand-mark"></div>
+            <div class="brand-text">Live API Playground</div>
+          </div>
+          <div class="status-indicator" id="status-indicator">
+            <span class="status-dot status-idle"></span>
+            <span class="status-label">Idle</span>
+          </div>
+          <div class="header-actions">
+            <button id="open-settings" type="button" class="btn btn-ghost">Settings</button>
+            <button id="session-button" type="button" class="btn btn-primary">Start session</button>
+          </div>
+        </header>
+
+        <main class="app-main">
+          <section class="panel conversation-panel">
+            <div class="panel-header">
+              <div class="panel-title">Conversation</div>
+              <button id="clear-chat" type="button" class="link-button">Clear</button>
+            </div>
+            <div class="conversation" id="conversation">
+              <div class="empty-state" id="empty-state">
+                <div class="empty-icon">[chat]</div>
+                <div class="empty-title">No messages yet</div>
+                <div class="empty-hint">
+                  Start a session and begin speaking, or send a text message below.
+                </div>
+              </div>
+            </div>
+            <div class="composer">
+              <textarea
+                id="chat-input"
+                class="composer-input"
+                placeholder="Type a message and press Enter…"
+                rows="1"
+              ></textarea>
+              <button id="send-button" type="button" class="btn btn-primary">Send</button>
+            </div>
+          </section>
+
+          <aside class="panel side-panel">
+            <div class="side-section">
+              <div class="side-section-title">Configuration</div>
+              <dl class="kv-list" id="kv-list">
+                <dt>Endpoint</dt>
+                <dd id="kv-endpoint" class="mono ellipsis">default</dd>
+                <dt>Model</dt>
+                <dd id="kv-model" class="mono ellipsis">—</dd>
+                <dt>Voice</dt>
+                <dd id="kv-voice">—</dd>
+                <dt>Language</dt>
+                <dd id="kv-language">—</dd>
+              </dl>
+            </div>
+
+            <div class="side-section">
+              <div class="side-section-title">Sources</div>
+              <div class="source-row">
+                <label for="audio-source" class="source-label">Microphone</label>
+                <select id="audio-source" class="select">
+                  <option value="none">None</option>
+                </select>
+              </div>
+              <div class="source-row">
+                <label for="video-source" class="source-label">Video</label>
+                <select id="video-source" class="select">
+                  <option value="none">None</option>
+                  <option value="screen">Screen sharing</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="side-section">
+              <div class="side-section-title">Preview</div>
+              <div class="video-preview" id="video-preview">
+                <video class="video-display" id="video-display" autoplay muted playsinline></video>
+                <div class="video-empty" id="video-empty">No video</div>
+              </div>
+            </div>
+
+            <div class="side-section">
+              <div class="status-message" id="status-message"></div>
+            </div>
+          </aside>
+        </main>
+      </div>
+
+      <!-- ============================== Page: Recording Viewer ============ -->
+      <div class="app-page" id="page-recording" hidden>
+        <header class="app-header">
+          <div class="brand">
+            <div class="brand-mark"></div>
+            <div class="brand-text">Recording Viewer</div>
+          </div>
+          <span class="path mono ellipsis" id="rv-input-path"></span>
+          <div class="header-actions">
+            <label class="upload-label">
+              <input type="file" id="rv-upload-input" accept=".pb,application/octet-stream" hidden />
+              <button id="rv-upload-btn" type="button" class="btn btn-ghost">Upload file…</button>
+            </label>
+            <span class="status-badge" id="rv-status"></span>
+          </div>
+        </header>
+        <main class="app-main app-main-recording">
+          <aside class="rv-list-panel">
+            <div class="rv-list-header">
+              <div class="rv-list-title">Recent recordings</div>
+              <button id="rv-refresh-list" type="button" class="rv-list-refresh" title="Refresh">
+                Refresh
+              </button>
+            </div>
+            <div class="rv-list" id="rv-list">
+              <div class="rv-list-empty">Loading…</div>
+            </div>
+          </aside>
+          <section class="rv-content" id="rv-root">
+            <div class="empty-state">
+              <div class="empty-icon">[rec]</div>
+              <div class="empty-title">No recording loaded</div>
+              <div class="empty-hint">
+                Pick a recent recording from the list, or upload a .pb file.
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <!-- ============================== Settings modal ====================== -->
+    <div
+      id="settings-modal"
+      class="modal-root"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      hidden
+    >
+      <div class="modal-backdrop" data-close-modal></div>
+      <div class="modal-card">
+        <header class="modal-card-header">
+          <div>
+            <h2 id="settings-title">Session settings</h2>
+            <p class="modal-card-subtitle">
+              Customize the public Vertex Live API session setup.
+            </p>
+          </div>
+          <button type="button" class="icon-button" aria-label="Close" data-close-modal>X</button>
+        </header>
+
+        <div class="modal-card-body">
+          <!-- WebSocket endpoint (computed from environment + location) -->
+          <div class="settings-block split">
+            <div>
+              <label class="settings-label" for="ws-environment">
+                Environment
+                <span class="settings-hint-inline">selects the host suffix</span>
+              </label>
+              <select id="ws-environment" class="input">
+                <option value="prod" selected>prod</option>
+                <option value="staging">staging</option>
+              </select>
+            </div>
+            <div>
+              <label class="settings-label" for="ws-location">
+                Location
+                <span class="settings-hint-inline">GCP region, or <code>global</code></span>
+              </label>
+              <select id="ws-location" class="input"></select>
+            </div>
+          </div>
+          <div class="settings-block">
+            <label class="settings-label" for="ws-endpoint-display">
+              Computed endpoint URL
+              <span class="settings-hint-inline">read-only; derived from environment + location</span>
+            </label>
+            <input
+              id="ws-endpoint-display"
+              class="input mono"
+              type="text"
+              readonly
+              tabindex="-1"
+              aria-label="Computed websocket endpoint URL (read-only)"
+            />
+          </div>
+
+          <!-- Model -->
+          <div class="settings-block">
+            <label class="settings-label" for="model-id">Model</label>
+            <div class="model-row">
+              <select id="model-id" class="input model-select"></select>
+              <button id="refresh-models" type="button" class="btn btn-ghost">Refresh</button>
+            </div>
+            <input
+              id="model-value"
+              class="input mono model-value-display"
+              type="text"
+              readonly
+              tabindex="-1"
+              title="Model id sent to the backend"
+            />
+          </div>
+
+          <!-- System instruction -->
+          <div class="settings-block">
+            <label class="settings-label" for="system-instruction">System instruction</label>
+            <textarea id="system-instruction" class="input textarea" rows="4">You are a helpful assistant.</textarea>
+          </div>
+
+          <!-- Speech config -->
+          <details class="advanced">
+            <summary>
+              <span>Speech config (<code>generation_config.speech_config</code>)</span>
+            </summary>
+            <div class="advanced-body">
+              <div class="settings-block split">
+                <div>
+                  <label class="settings-label" for="voice-name">Voice</label>
+                  <input id="voice-name" class="input" type="text" value="Aoede" />
+                </div>
+                <div>
+                  <label class="settings-label" for="language-code">Language</label>
+                  <input id="language-code" class="input" type="text" value="en-US" />
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <!-- Generation parameters -->
+          <details class="advanced">
+            <summary><span>Generation parameters</span></summary>
+            <div class="advanced-body">
+              <div class="settings-block">
+                <label class="settings-label">Response modalities</label>
+                <div class="checkbox-row">
+                  <label class="checkbox">
+                    <input type="checkbox" id="modality-audio" checked />
+                    <span>AUDIO</span>
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" id="modality-text" />
+                    <span>TEXT</span>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-grid">
+                <div>
+                  <label class="settings-label" for="gen-temperature">Temperature</label>
+                  <input id="gen-temperature" class="input" type="number" step="0.05" min="0" max="2" placeholder="default" />
+                </div>
+                <div>
+                  <label class="settings-label" for="gen-top-p">Top P</label>
+                  <input id="gen-top-p" class="input" type="number" step="0.05" min="0" max="1" placeholder="default" />
+                </div>
+                <div>
+                  <label class="settings-label" for="gen-top-k">Top K</label>
+                  <input id="gen-top-k" class="input" type="number" min="0" placeholder="default" />
+                </div>
+                <div>
+                  <label class="settings-label" for="gen-max-tokens">Max output tokens</label>
+                  <input id="gen-max-tokens" class="input" type="number" min="0" placeholder="default" />
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <!-- Transcription -->
+          <details class="advanced">
+            <summary><span>Transcription</span></summary>
+            <div class="advanced-body">
+              <label class="checkbox">
+                <input id="input-transcription" type="checkbox" checked />
+                <span>Enable input transcription</span>
+              </label>
+              <label class="checkbox">
+                <input id="output-transcription" type="checkbox" checked />
+                <span>Enable output transcription</span>
+              </label>
+            </div>
+          </details>
+
+          <!-- Realtime input config -->
+          <details class="advanced">
+            <summary><span>Realtime input (<code>realtime_input_config</code>)</span></summary>
+            <div class="advanced-body">
+              <div class="settings-block">
+                <label class="settings-label" for="activity-handling">Activity handling</label>
+                <select id="activity-handling" class="input">
+                  <option value="">Default (unspecified)</option>
+                  <option value="START_OF_ACTIVITY_INTERRUPTS">START_OF_ACTIVITY_INTERRUPTS</option>
+                  <option value="NO_INTERRUPTION">NO_INTERRUPTION</option>
+                </select>
+              </div>
+              <div class="settings-block">
+                <label class="settings-label" for="turn-coverage">Turn coverage</label>
+                <select id="turn-coverage" class="input">
+                  <option value="">Default (unspecified)</option>
+                  <option value="TURN_INCLUDES_ONLY_ACTIVITY">TURN_INCLUDES_ONLY_ACTIVITY</option>
+                  <option value="TURN_INCLUDES_ALL_INPUT">TURN_INCLUDES_ALL_INPUT</option>
+                </select>
+              </div>
+              <fieldset class="settings-fieldset">
+                <legend class="settings-legend">Automatic activity detection</legend>
+                <label class="checkbox">
+                  <input id="disable-automatic-activity-detection" type="checkbox" />
+                  <span>Disabled (<code>disabled = true</code>)</span>
+                </label>
+                <div class="settings-grid">
+                  <div>
+                    <label class="settings-label" for="aad-start-sensitivity">Start sensitivity</label>
+                    <select id="aad-start-sensitivity" class="input">
+                      <option value="">Default (unspecified)</option>
+                      <option value="START_SENSITIVITY_HIGH">START_SENSITIVITY_HIGH</option>
+                      <option value="START_SENSITIVITY_LOW">START_SENSITIVITY_LOW</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="aad-end-sensitivity">End sensitivity</label>
+                    <select id="aad-end-sensitivity" class="input">
+                      <option value="">Default (unspecified)</option>
+                      <option value="END_SENSITIVITY_HIGH">END_SENSITIVITY_HIGH</option>
+                      <option value="END_SENSITIVITY_LOW">END_SENSITIVITY_LOW</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="settings-label" for="aad-prefix-padding-ms">Prefix padding (ms)</label>
+                    <input id="aad-prefix-padding-ms" class="input" type="number" min="0" placeholder="default" />
+                  </div>
+                  <div>
+                    <label class="settings-label" for="aad-silence-duration-ms">Silence duration (ms)</label>
+                    <input id="aad-silence-duration-ms" class="input" type="number" min="0" placeholder="default" />
+                  </div>
+                </div>
+              </fieldset>
+            </div>
+          </details>
+
+          <!-- Context window compression -->
+          <details class="advanced">
+            <summary><span>Context window compression</span></summary>
+            <div class="advanced-body">
+              <label class="checkbox">
+                <input id="ctx-compression" type="checkbox" />
+                <span>Enable sliding window compression</span>
+              </label>
+              <div class="settings-grid">
+                <div>
+                  <label class="settings-label" for="ctx-trigger-tokens">Trigger tokens</label>
+                  <input id="ctx-trigger-tokens" class="input" type="number" value="100000" />
+                </div>
+                <div>
+                  <label class="settings-label" for="ctx-target-tokens">Target tokens</label>
+                  <input id="ctx-target-tokens" class="input" type="number" value="4000" />
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <!-- Setup JSON override -->
+          <details class="advanced">
+            <summary><span>Setup JSON override</span></summary>
+            <div class="advanced-body">
+              <p class="settings-help">
+                When non-empty, this JSON is sent verbatim as the first client message
+                (the structured fields above are ignored). Expected shape:
+                <code>{"setup": {"model": "...", ...}}</code>.
+              </p>
+              <textarea
+                id="setup-json-override"
+                class="input textarea mono"
+                rows="8"
+                placeholder='{"setup": {"model": "...", "generationConfig": {...}}}'
+              ></textarea>
+            </div>
+          </details>
+        </div>
+
+        <footer class="modal-card-footer">
+          <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+          <button type="button" class="btn btn-primary" id="settings-done">Done</button>
+        </footer>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

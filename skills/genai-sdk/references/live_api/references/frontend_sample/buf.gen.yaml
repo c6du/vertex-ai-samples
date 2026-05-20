@@ -1,0 +1,20 @@
+# buf codegen config: generates TypeScript + Python bindings from the
+# reconstructed Live API protos (../client_server_messages.proto) and the
+# portable recording-format proto (proto/recorded_frame.proto).
+#
+# Run with `npm run gen` or `bash codegen.sh`.
+version: v2
+managed:
+  enabled: true
+plugins:
+  # @bufbuild/protoc-gen-es: TypeScript bindings for the browser.
+  - local: ./node_modules/.bin/protoc-gen-es
+    out: gen
+    opt:
+      - target=ts
+      - import_extension=js
+inputs:
+  - directory: proto
+# Python bindings are generated separately by `codegen.sh` via
+# `python -m grpc_tools.protoc` so users don't need a standalone `protoc`
+# on PATH.

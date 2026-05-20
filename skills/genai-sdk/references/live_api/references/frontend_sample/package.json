@@ -1,0 +1,23 @@
+{
+  "name": "live-api-frontend-sample",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable reference frontend + Python backend for the public Gemini Live API. Built on @bufbuild/protobuf for typed wire access.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "gen": "bash ./codegen.sh"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.2.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.47.0",
+    "@bufbuild/protoc-gen-es": "^2.2.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0"
+  }
+}

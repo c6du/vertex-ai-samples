@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+gen/*.ts
+!gen/README.md
+server/gen/*.py
+!server/gen/README.md
+!server/gen/__init__.py
+proto/client_server_messages.proto
+.recordings/
