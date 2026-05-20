@@ -11,31 +11,47 @@ description: >-
 
 # Live API Recording Viewer
 
-A web app that loads a recorded Live API session (a length-prefixed
+> **Part of the combined "recordings" feature.** The viewer and the
+> message recorder (`message_recorder.md`) are a single user-facing
+> option: enabling recordings turns on both, and disabling it removes
+> both. The agent MUST NOT ask about the recorder and the viewer
+> separately.
+
+A web view that loads a recorded Live API session (a length-prefixed
 protobuf stream in a `.pb` file produced by the message recorder) and
 renders it as one interactive timeline per agent. A developer points the viewer at a
 recording and immediately sees the bidirectional sequence of frames, can
 hover or click any frame to inspect its full payload, and can listen to
 individual audio chunks or a full stereo mix.
 
-## Reference frontend
+## Deployment: a tab inside the chat playground
 
-A complete reference frontend is provided in `recording_viewer_frontend/`:
+When this feature is enabled, the viewer is **not** a separate web
+app on a separate port. Instead it MUST be served by the same
+process, on the same port, as the chat playground backend, and the
+frontend MUST present it as a second sidebar tab ("Recordings") of
+the single-page app that hosts the Chat tab (see `interactive_ui.md`).
+Switching between Chat and Recordings is a client-side route change;
+it does not reload the page. Loaded recordings are kept in-process on
+the server so the Chat tab can keep its websocket while the user
+inspects a recording in the other tab.
 
-- **`recording_viewer_frontend/index.html`** — Page structure: header
-  with path input / load / upload toolbar, agent blocks rendered
-  dynamically, tooltip overlay.
-- **`recording_viewer_frontend/script.js`** — Agent rendering, timeline
-  bars with duration/instant classification, fisheye magnification,
-  per-component lane packing with zigzag ordering for overlapped bars,
-  pinnable tooltip with proto detail, per-agent zoom with viewport-
-  center preservation, Web Audio chunk playback, load/upload API calls.
-- **`recording_viewer_frontend/style.css`** — Design tokens shared with
-  `playground_frontend/`, timeline/bar/tooltip styles, light theme.
+A reference frontend implementation lives in
+`frontend/recording_viewer.ts` (rendered as the "Recordings" tab of
+the single-entry `frontend/index.html`). It expects the viewer HTTP
+endpoints listed below to be served by the **same** backend that
+handles `/start` and `/ws` (see `backend_bridge.md`); the agent
+implements them in the language picked in `SKILL.md` Step 1.
 
-**The agent should use these reference files as the starting point and
-rewrite them to fit the target project.** Do not generate the frontend
-from scratch — adapt the reference.
+The shared `frontend/style.css` and `frontend/index.html` host the
+chrome (sidebar, recordings tab header, recent-list panel, tooltip
+overlay). There is **no "load by path" input** — recordings are
+loaded either by clicking an entry in the recent list (which the
+server populated from its cache directory) or by uploading a
+recording file from the user's machine.
+
+**Adapt these reference files rather than producing the viewer from
+scratch.**
 
 ---
 
@@ -58,8 +74,13 @@ from scratch — adapt the reference.
                                      └──────────────────────────────┘
 ```
 
-The server starts with **no recording loaded**. The user picks a file
-path or uploads a file from the page.
+The server starts with **no recording loaded**. The user either picks
+an entry from the "Recent recordings" list (recordings produced by
+chat sessions running in the same process, surfaced via
+`/api/recordings`) or uploads a `.pb` file from their machine. There
+is **no API for loading by arbitrary server-side filesystem path** —
+the chat-side recorder and the viewer share a single cache directory
+and that is the only on-disk surface the viewer reads from.
 
 ---
 
@@ -69,18 +90,29 @@ path or uploads a file from the page.
 
 | Method & Path              | Purpose |
 | -------------------------- | --- |
-| `GET /`                    | Serves the SPA (static assets). |
+| `GET /`                    | Serves the combined SPA (Chat + Recordings tabs). |
+| `GET /api/recordings`      | Lists recent recording files on disk so the Recordings tab can populate its "Recent recordings" list automatically. |
 | `GET /api/agents`          | JSON payload with per-agent timelines (see schema below). |
 | `GET /api/audio/<idx>.wav` | 24 kHz stereo WAV for agent `<idx>`. Left = client audio, right = server audio. Silence gaps preserved. Interrupted audio excluded. |
-| `POST /api/load`           | Body `{"path": "..."}`. Loads a new recording. Returns the `/api/agents` payload. |
+| `GET /api/frame/<idx>/<frame_idx>` | One client video frame from the per-agent sampled `frames[]` list (image bytes; `Content-Type` from the stored mime). Powers the **Replay popup** slideshow. The popup binary-searches `frame_ms[]` against `audio.currentTime` to figure out which index to request. |
+| `GET /api/image/<idx>/<msg_idx>/<chunk_idx>` | Raw image bytes for one chunk of one message — i.e. `messages[msg_idx].image_chunks[chunk_idx]` for the given agent. Powers the **per-message image popup** opened from a pinned tooltip. |
+| `POST /api/load`           | Body `{"name": "..."}`. Loads a recording that already lives in the cache directory (the `name` MUST be one of the entries returned by `/api/recordings`). Returns the `/api/agents` payload. |
 | `POST /api/upload`         | Multipart `file=...`. Uploads + loads a recording. Returns the `/api/agents` payload. |
+| `GET /api/download`        | `?name=<filename>` — raw recording bytes for one entry from the "Recent recordings" list. |
+
+There is intentionally **no path-based load endpoint**: every
+recording the viewer can open either originated in the same process's
+cache directory (and is referenced by `name`) or was just uploaded
+through `/api/upload`. This keeps the on-disk surface area small and
+removes the possibility of a path traversal.
 
 The recording on disk is always a length-prefixed serialized protobuf
 stream in a `.pb` file (see `message_recorder.md`). No other format is
 supported.
 
-Both load endpoints replace the in-memory recording atomically under a
-lock. Offload parsing + WAV mixing to a worker thread.
+Both `/api/load` and `/api/upload` replace the in-memory recording
+atomically under a lock. Offload parsing + WAV mixing to a worker
+thread.
 
 ### Reconstruction pipeline
 
@@ -244,7 +276,7 @@ For one agent, build a 24 kHz stereo WAV:
 
 ```jsonc
 {
-  "input_path": "/path/to/recording  OR  <uploaded: name>",
+  "input_path": "<recording filename in cache dir>  OR  <uploaded: name>",
   "agents": [
     {
       "index": 0,
@@ -252,9 +284,10 @@ For one agent, build a 24 kHz stereo WAV:
       "total_ms": 128340.5,
       "messages": [
         {
+          "index": 0,
           "direction": "client" | "server",
           "kind": "realtime_input" | "server_content" | ...,
-          "modality": "audio" | "text" | ...,
+          "modality": "audio" | "video" | "image" | "text" | ...,
           "interrupted": false,
           "start_ms": 1234.5,
           "end_ms": 1456.7,
@@ -264,8 +297,26 @@ For one agent, build a 24 kHz stereo WAV:
           "audio_bytes": 9600,
           "audio_rate_hz": 24000,
           "mime_types": ["audio/pcm;rate=24000"],
+          // 0 or more image chunks attached to this single message.
+          // Referenced by the per-message image popup via
+          //   GET /api/image/<agent_idx>/<msg_idx>/<chunk_index>
+          "image_bytes": 0,
+          "image_mime_types": [],
+          "image_chunks": [
+            { "chunk_index": 0, "mime": "image/jpeg", "byte_len": 18432 }
+          ],
           "detail": { /* proto-to-JSON, large blobs stripped */ }
         }
+      ],
+      // Sampled client video frames used as the Replay popup's
+      // slideshow source. Capped per the server constant
+      // `_FRAME_LIMIT` (default 600). The popup binary-searches
+      // `frame_ms[]` against `audio.currentTime` and fetches
+      //   GET /api/frame/<agent_idx>/<index>
+      // when the index changes.
+      "frames": [
+        { "index": 0, "frame_ms": 412.0,
+          "mime": "image/jpeg", "byte_len": 18432 }
       ]
     }
   ]
@@ -298,7 +349,7 @@ Key differences:
 
 ## Frontend key patterns
 
-The reference code in `recording_viewer_frontend/` implements all of
+The reference code in `frontend/recordings/` implements all of
 these. Read the code for implementation details — here is a summary of
 the patterns the agent should preserve when adapting:
 
@@ -354,10 +405,28 @@ the patterns the agent should preserve when adapting:
   additionally `scaleX`. Cluster bands redistribute vertically near the
   cursor. Restores exactly on `mouseleave`.
 - **Pinnable tooltip** — Hover shows a summary; click pins it with a
-  close button, full proto detail `<pre>`, and a "Play audio" button.
+  close button, full proto detail `<pre>`, a "Play audio" button (when
+  the message has audio), and a "View image" button (when the message
+  has any `image_chunks[]`).
 - **Per-chunk audio playback** — Uses Web Audio API
   (`BufferSource.start(0, offset, duration)`) on a lazily-decoded
   per-agent `AudioBuffer` cache. Always uses playback-mode timestamps.
+- **Replay popup** (`frontend/recordings/replay.js`, `ReplayPopup`) —
+  Per-agent "▶ Replay session" button opens an overlay with an
+  `<audio controls>` playing the mixed stereo WAV alongside a
+  slideshow of the client's sampled video frames. Frames are
+  pre-fetched as object URLs (`URL.createObjectURL`), and a
+  `requestAnimationFrame` loop binary-searches the per-agent
+  `frame_ms[]` against `audio.currentTime * 1000` to decide which
+  frame to show. Closing the popup cancels the rAF loop and revokes
+  every object URL. Loading a new recording bumps a `loadVersion`
+  cache-buster appended to every `/api/audio` and `/api/frame` URL.
+- **Per-message image popup** (`frontend/recordings/replay.js`,
+  `ImagePopup`) — Pinned tooltips on messages with `image_chunks[]`
+  expose a "View image" button that opens an overlay containing one
+  `<img>` per chunk, loaded from `/api/image/<agent>/<msg>/<chunk>`
+  as an object URL. Useful for inspecting individual `realtime_input`
+  video frames or server-emitted `inlineData` image parts.
 - **Per-agent zoom** — `[- level% + Reset]` widget. `ZOOM_STEP = sqrt(2)`.
   Re-renders only the affected timeline and preserves the viewport center.
 - **Interrupted bars** — Striped pattern + strike-through. Excluded from
@@ -370,8 +439,9 @@ the patterns the agent should preserve when adapting:
 - **Server**: any HTTP framework is fine. The hard part is the
   reconstruction pipeline (cursor pushing + interrupt semantics) and
   WAV mixing.
-- **Frontend**: adapt the `recording_viewer_frontend/` reference files.
-  CSS tokens are shared with `playground_frontend/` for consistency.
+- **Frontend**: adapt the `frontend/recordings/` reference modules
+  and the recordings page in `frontend/index_combined.html`. CSS
+  tokens are shared with the chat surface via `frontend/style.css`.
 
 The contract between server and frontend is the JSON shape above plus
 the WAV endpoint.

@@ -21,11 +21,20 @@ no hand-rolled JSON shapes for messages already defined in the proto.
 
 ## Optional features integration
 
-### Recorder (per `message_recorder.md`)
+### Recordings (recorder + viewer; per `message_recorder.md` and `recording_viewer.md`)
+
+The recorder and the viewer are a **single combined feature**: the
+agent asks the user about them exactly once ("enable recordings?"),
+and both are produced together or not at all. The recorder writes the
+on-disk artefacts; the viewer loads them. Shipping one without the
+other is not supported.
+
+When the recordings feature is enabled:
 
 -   The service class accepts the recorder as an **optional**
-    constructor argument. When omitted, recording is disabled with zero
-    runtime overhead.
+    constructor argument. When omitted (i.e. the user disabled
+    recordings entirely), recording is disabled with zero runtime
+    overhead.
 -   The class owns building each record before calling
     `recorder.record(...)`: set the appropriate `payload` oneof arm
     (client or server message), the `timestamp`, and the `agent_name`.
@@ -37,12 +46,14 @@ no hand-rolled JSON shapes for messages already defined in the proto.
 -   On-disk format: length-prefixed serialized protobuf (recommended)
     or JSON Lines. Do **not** use Google-internal formats (e.g.
     recordio). Write **one record per message** — never batch.
-
-### Viewer (per `recording_viewer.md`)
-
--   Only useful when the recorder is also enabled.
--   If the user picks the viewer without the recorder, warn them they
-    will have nothing to load.
+-   The viewer is served from the **same process and same port** as
+    the chat backend, and is rendered as a second sidebar tab
+    ("Recordings") in the same single-page app as the chat playground
+    (see `interactive_ui.md`). It is not a separate service.
+-   Recordings produced by completed chat sessions appear in the
+    Recordings tab's "Recent recordings" list automatically; the user
+    can also load a file by server path or by uploading from their
+    machine.
 
 ## Audio / transcription playback
 
@@ -92,13 +103,31 @@ For every web service produced, the agent MUST start it, open it in a
 -   **Test UI**: open a connection → send a text message → receive a
     response. Trigger an interrupt scenario and confirm playback is
     flushed.
--   **Recorder** (if enabled): run a session that records → close the
-    recorder → the resulting file is non-empty and parseable as the
-    chosen on-disk format.
--   **Viewer** (if enabled):
+-   **Recordings** (if the recordings feature is enabled, covering BOTH
+    recorder and viewer together):
+    -   *Recorder leg:* run a session that records → close the
+        recorder → the resulting file is non-empty and parseable as
+        the chosen on-disk format.
+    -   *Setup coverage (recorder):* after a smoke session, the
+        resulting recording file MUST begin with exactly one
+        `client` / `setup` record followed by one `server` /
+        `setupComplete` record. Assert this in the recorder smoke
+        test — it catches the common "send-path records, but the
+        setup bypass forgets" bug where the manager's separate
+        connect-time code path skips `recorder.record(...)`.
+    -   *Two-tab integration:* the chat tab and the Recordings tab are
+        served from the same origin/port and switching between them in
+        the sidebar does not reload the page; the just-recorded
+        session appears in the Recordings tab's "Recent recordings"
+        list (refreshing the list may be required).
+    -   *Viewer leg:* the checks below.
     1.  Load the shipped fixture
-        `references/sample_recording.jsonl` by path, then load it
-        again by upload.
+        `references/sample_recording.jsonl` by **uploading** it
+        through the Recordings tab. (The viewer no longer accepts an
+        arbitrary filesystem path; recordings are loaded either from
+        the in-process cache directory via the "Recent recordings"
+        list or by upload.) Upload it a second time to confirm
+        idempotency.
     2.  Switch the global toggle and at least one per-agent toggle
         between Playback and Message modes.
     3.  Click a server audio bar and pin its tooltip; confirm the
@@ -121,11 +150,27 @@ For every web service produced, the agent MUST start it, open it in a
         reconstruction pipeline, not the frontend. See
         `recording_viewer.md` § Diagnostics for the five known
         failure modes.
--   **Recorder + Viewer end-to-end** (if both enabled): record a live
-    session in the test UI → use the save dialog to open it in the
-    viewer → server audio bars appear in playback mode as **wide
-    duration bars** (not instant markers); the same bars in message
-    mode collapse to the 4 px fixed-width form.
+    6.  **Replay popup** — click "▶ Replay session" on any agent that
+        has streamed client video frames; confirm the popup opens,
+        `<audio controls>` plays the mixed WAV, and the displayed
+        video frame updates as `audio.currentTime` advances. Closing
+        the popup (Esc / × / backdrop click) revokes the cached
+        object URLs (no console errors).
+    7.  **Per-message image popup** — pin a tooltip on any message
+        whose `image_chunks[]` is non-empty (a client `realtime_input`
+        video frame or a server-emitted `inlineData` image part);
+        click "View image"; confirm the image renders. If no such
+        message exists in the fixture, the path is exercised by an
+        empty-state ("No image chunks attached to this message.")
+        rather than skipped silently.
+-   **Recordings end-to-end** (if the feature is enabled): record a
+    live session in the Chat tab → after the session toast appears,
+    switch to the Recordings tab (no page reload) → the new recording
+    is present in the "Recent recordings" list → click it to load →
+    server audio bars appear in playback mode as **wide duration
+    bars** (not instant markers); the same bars in message mode
+    collapse to the 4 px fixed-width form; "▶ Replay session" plays
+    the audio with the slideshow advancing in sync.
 
 Report any failures and fix them before declaring the implementation
 complete.

@@ -1,0 +1,10 @@
+# Available models surfaced to the frontend via GET /models.
+#
+# Each entry has two fields:
+#   name:  Display label shown in the UI dropdown.
+#   value: The bare model id. The frontend prepends
+#          `projects/.../locations/.../publishers/google/models/` to build
+#          the fully-qualified resource name sent to the WebSocket backend.
+models:
+  - name: Gemini live 2.5 flash native audio
+    value: gemini-live-2.5-flash-native-audio

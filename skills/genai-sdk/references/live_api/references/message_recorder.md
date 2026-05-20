@@ -11,6 +11,12 @@ description: >-
 
 # Live API Message Recorder
 
+> **Part of the combined "recordings" feature.** The recorder and the
+> in-app viewer (`recording_viewer.md`) are a single user-facing
+> option: when the user enables recordings the project gets both, and
+> when they disable it the project gets neither. The agent MUST NOT
+> ask about the recorder and the viewer separately.
+
 A `MessageRecorder` is an optional companion to a Live API session manager. Its
 sole job is to **persist every frame that crosses the WebSocket** — both the
 client messages the application sends and the server messages it receives — to
@@ -62,6 +68,16 @@ Each persisted entry should be a self-describing record containing at minimum:
 All recorders **MUST** persist records as a **length-prefixed serialized
 protobuf** stream written to a file with the `.pb` extension. No other
 container format is permitted.
+
+> **The recorder is wire-format-agnostic with respect to the browser
+> leg.** Whether the backend bridge exchanges JSON text frames or
+> binary protobuf with the browser does **not** change the on-disk
+> recording format. The recorder runs on the backend, behind the
+> bridge, and only sees fully-parsed proto messages — by the time a
+> record is built, the bridge has already converted any inbound JSON
+> into a `BidiGenerateContent*Message` proto. The `.pb` length-prefixed
+> binary format described below is the single mandated output regardless
+> of any browser-side serialization choices.
 
 Concretely, every record on disk is:
 
@@ -218,6 +234,16 @@ A `SessionManager` that supports a recorder MUST:
       timing).
    3. Set `agent_name` (and any other contextual fields) if relevant.
    4. Only then pass the completed record to `recorder.record(...)`.
+
+   **Cover the setup frame explicitly.** If your manager has a separate
+   code path for the initial `setup` frame (it usually does — `setup` is
+   typically sent by the manager itself during `connect()` rather than by
+   the user via `send()`), **that path is also responsible for calling
+   `recorder.record(...)`**. Do not assume the generic `send()` helper
+   covers it. The same rule applies to the `setupComplete` server frame
+   and to any frames replayed during reconnect / session resumption: every
+   wire-level frame must be recorded, no matter which internal helper put
+   it on the wire.
 3. Treat recording as **best-effort**: the session manager's correctness and
    liveness must not depend on the recorder. Recorder errors are logged but
    do not interrupt the session.

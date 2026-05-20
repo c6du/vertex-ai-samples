@@ -18,16 +18,27 @@ This skill guides the implementation of a `SessionManager` class for the Gemini 
 3.  **Session Resumption**: Automatically reconnect and restore state when disconnections occur.
 4.  **Optional Message Recording**: Accept an *optional* `MessageRecorder` (see
     `message_recorder.md`) at construction time. When supplied, the session
-    manager MUST forward every successfully sent client message and every
-    received server message to `recorder.record(...)` so the full bidirectional
-    transcript can be persisted. When the recorder is omitted (`None` / not
-    provided), recording is disabled with zero runtime overhead and no
-    behavioral change. Recorder errors are best-effort and must never
-    interrupt the session. The session manager MUST NOT call `recorder.start()`
-    or `recorder.close()` — the recorder's lifecycle is owned by the caller,
-    so a single recorder instance can be shared across multiple session
-    managers (e.g. multiple agents writing to one transcript, disambiguated
-    by `agent_name`).
+    manager MUST record **every frame that crosses the wire in either
+    direction**, including:
+    -   the `setup` client frame the manager sends itself during connect
+        (not just frames the user passes to `send()`),
+    -   the `setupComplete` server frame returned in response,
+    -   every subsequent client frame and every server frame, and
+    -   any frames re-sent during reconnect / session-resumption replay.
+
+    There are no exceptions: if a frame is on the wire, it MUST be in the
+    log. A common bug is for the generic `send()` path to record correctly
+    while a separate "initial setup" code path forgets to call
+    `recorder.record(...)` — every send/receive site, including the setup
+    bypass, is responsible for recording.
+
+    When the recorder is omitted (`None` / not provided), recording is
+    disabled with zero runtime overhead and no behavioral change. Recorder
+    errors are best-effort and must never interrupt the session. The session
+    manager MUST NOT call `recorder.start()` or `recorder.close()` — the
+    recorder's lifecycle is owned by the caller, so a single recorder
+    instance can be shared across multiple session managers (e.g. multiple
+    agents writing to one transcript, disambiguated by `agent_name`).
 
 ## Protocol Details
 

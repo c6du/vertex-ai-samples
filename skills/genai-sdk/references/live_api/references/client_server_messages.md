@@ -1,16 +1,16 @@
 # Live API `ClientMessage` and `ServerMessage` Reference
 
-This document describes the **wire-level WebSocket protocol** for the Gemini Live
-API as exposed by two public endpoints:
+This document describes the **wire-level WebSocket protocol** for the
+Gemini Enterprise Live API (Vertex AI's
+`LlmBidiService.BidiGenerateContent` RPC).
 
-| Backend | Docs |
-| --- | --- |
-| **Gemini Enterprise Agent Platform** (`BidiGenerateContent*`) | https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/multimodal-live |
-| **Google AI / Gemini Developer API** (`LiveClient*` / `LiveServer*`) | https://ai.google.dev/api/live |
+Reference docs:
+<https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/multimodal-live>
 
-The two services share the same underlying RPC (`BidiGenerateContent`) and the
-same JSON/proto shapes, but differ in endpoint URL, auth, model name format,
-and a handful of fields. Search corresponding websites for more information.
+This skill targets **Gemini Enterprise only**. The public Google AI /
+Gemini Developer API endpoint
+(`generativelanguage.googleapis.com/.../GenerativeService`) is out of
+scope; references to it have been removed.
 
 ---
 
@@ -18,25 +18,55 @@ and a handful of fields. Search corresponding websites for more information.
 
 ### Endpoints
 
-| Backend | WebSocket URI |
+| Region | WebSocket URI |
 | --- | --- |
-| Gemini Enterprise Agent Platform | `wss://{LOCATION}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent` |
-| Gemini Enterprise Agent Platform (global) | `wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent` |
-| Google AI | `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent` |
-| Google AI (ephemeral token) | `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained` |
+| Regional | `wss://{LOCATION}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent` |
+| Global   | `wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent` |
 
 ### Auth
 
-- **Gemini Enterprise Agent Platform** — `Authorization: Bearer <ADC token>` (or API key in Express
-  mode).
-- **Google AI** — `?key=<API_KEY>` query parameter, **or**
-  `Authorization: Token <ephemeral_token>` against the `Constrained` method.
+`Authorization: Bearer <ADC token>` (Application Default Credentials,
+refreshed periodically — see `session_manager.md`). API-key auth is
+not supported by this skill.
 
 ### Frames
 
 All frames are JSON-serialized protobuf messages of either `ClientMessage`
 (client → server) or `ServerMessage` (server → client). Each frame is exactly
 one WebSocket text message.
+
+### Browser ↔ backend bridge: same JSON shape
+
+The reference frontend in `references/frontend/` uses the **same JSON
+shapes documented in this file** when talking to the backend bridge
+(see `backend_bridge.md`). Concretely:
+
+- The browser sends JSON text frames shaped as
+  `BidiGenerateContentClientMessage` (proto3 JSON encoding).
+- The bridge sends JSON text frames shaped as
+  `BidiGenerateContentServerMessage` back to the browser.
+- The bridge MAY forward those frames upstream verbatim, because the
+  upstream Vertex AI WebSocket also uses JSON text frames in the same
+  proto3 JSON shape.
+- The bridge MAY additionally send out-of-band JSON text frames of
+  the form `{"type": "tool_response", ...}` to the browser when it
+  executes a tool locally on behalf of the model — these are NOT
+  proto-shaped (they have a `type` discriminator) and are consumed by
+  `websocket_client.ts`.
+
+**Proto3 JSON encoding rules that bite in practice:**
+
+| Rule | What it means here |
+| --- | --- |
+| Field names are camelCase | `setup`, `realtimeInput`, `modelTurn`, `inlineData`, `turnComplete` — never the snake_case form from the `.proto` file. |
+| `bytes` fields are **base64 strings** | Audio chunks, video JPEG bytes, and any `Blob.data` field are base64-encoded on the wire. The browser `bytesToBase64` helper in `audio.ts` produces this shape. |
+| Enums encoded as their string names | e.g. `"AUDIO"`, `"TURN_INCLUDES_ALL_INPUT"`, not numeric ordinals. |
+| `int64` fields are JSON strings | e.g. `"triggerTokens": "100000"`, not `100000`. |
+| Unknown fields are silently ignored | A camelCase typo (`modelTurns` instead of `modelTurn`) silently drops the field — this is the #1 source of "frontend looks fine, model never speaks" bugs. Validate by parsing your JSON through the actual proto on the bridge. |
+
+If a project needs binary protobuf on the browser leg instead (e.g.
+for lower bandwidth on heavy audio paths), see the "Switching back to
+binary" note at the top of `proto_api.ts`.
 
 ---
 
@@ -118,16 +148,15 @@ Initial-and-only-once configuration for the session.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `model` | `string` (required) | Gemini Enterprise: `projects/{p}/locations/{l}/publishers/google/models/{m}`. Google AI: `models/{m}`. |
+| `model` | `string` (required) | Full resource path: `projects/{p}/locations/{l}/publishers/google/models/{m}`. See `support_models.md` for the list of valid short ids `{m}` and the regions each one is available in. |
 | `generationConfig` | `GenerationConfig` | Unsupported sub-fields here: `responseLogprobs`, `responseMimeType`, `logprobs`, `responseSchema`, `stopSequence`, `routingConfig`, `audioTimestamp`. |
 | `systemInstruction` | `Content` | Text-only parts. |
 | `tools[]` | repeated `Tool` | Function declarations and built-ins (Search, code execution). |
 | `sessionResumption` | `SessionResumptionConfig` | `{ handle?: string, transparent?: bool }`. Provide `handle` to resume; omit to start a new resumable session. |
 | `contextWindowCompression` | `ContextWindowCompressionConfig` | `{ triggerTokens?: int64, slidingWindow?: { targetTokens?: int64 } }`. |
 | `realtimeInputConfig` | `RealtimeInputConfig` | See below. |
-| `inputAudioTranscription` | `AudioTranscriptionConfig` | Gemini Enterprise: empty type. Google AI: `{ languageCodes?: string[] }`. |
+| `inputAudioTranscription` | `AudioTranscriptionConfig` | Empty type on Gemini Enterprise (presence-only flag). |
 | `outputAudioTranscription` | `AudioTranscriptionConfig` | Same. |
-| `proactivity` | `ProactivityConfig` | **Google AI only.** `{ proactiveAudio?: bool }`. |
 
 ### `RealtimeInputConfig`
 
@@ -135,7 +164,7 @@ Initial-and-only-once configuration for the session.
 | --- | --- | --- |
 | `automaticActivityDetection` | `AutomaticActivityDetection` | Unset → server-side VAD enabled by default. |
 | `activityHandling` | enum | `START_OF_ACTIVITY_INTERRUPTS` (default) \| `NO_INTERRUPTION`. |
-| `turnCoverage` | enum | Gemini Enterprise default `TURN_INCLUDES_ALL_INPUT`; Google AI default `TURN_INCLUDES_ONLY_ACTIVITY`. Also `TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO`. |
+| `turnCoverage` | enum | Default `TURN_INCLUDES_ALL_INPUT`. Also `TURN_INCLUDES_ONLY_ACTIVITY`, `TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO`. |
 
 ### `AutomaticActivityDetection`
 
@@ -174,11 +203,9 @@ Controls the **voice** the model speaks with. Only meaningful when
 | `voiceConfig` | `VoiceConfig` | Single-speaker voice. The Live API supports **only single-speaker** output. |
 | `languageCode` | `string` | BCP-47 (e.g. `en-US`, `de-DE`, `ja-JP`). Output language. Native-audio models auto-detect / switch on their own; for non-native-audio models, set this explicitly. See [Languages supported](#languages-supported). |
 
-> **Note on multi-speaker output:** `MultiSpeakerVoiceConfig` /
-> `multiSpeakerVoiceConfig` exist in the **standalone TTS API**
-> (`generateContent` against models like `gemini-2.5-flash-preview-tts`,
-> see <https://ai.google.dev/gemini-api/docs/speech-generation#multi-speaker>),
-> **not** in the Live API. A Live API session has exactly one
+> **Note on multi-speaker output:** the Live API does **not** support
+> `MultiSpeakerVoiceConfig` / `multiSpeakerVoiceConfig`. A Live API
+> session has exactly one
 > `prebuiltVoiceConfig.voiceName`. To approximate multiple speakers in a
 > Live session, use prompt engineering inside `systemInstruction` or
 > `clientContent` to have the single voice play different roles.
@@ -212,10 +239,9 @@ The Live API supports **30 prebuilt voices**. Names are case-sensitive.
 | Achird | Friendly | Zubenelgenubi | Casual | Vindemiatrix | Gentle |
 | Sadachbia | Lively | Sadaltager | Knowledgeable | Sulafat | Warm |
 
-**References (authoritative voice list):**
+**Reference (authoritative voice list):**
 
-- Gemini Enterprise Agent Platform: <https://cloud.google.com/gemini-enterprise-agent-platform/models/live-api/configure-language-voice#voices-supported>
-- Google AI (Gemini Developer API) — Speech generation voices: <https://ai.google.dev/gemini-api/docs/speech-generation#voices>
+- <https://cloud.google.com/gemini-enterprise-agent-platform/models/live-api/configure-language-voice#voices-supported>
 
 > The available set may vary per model (e.g. native-audio vs. half-cascade
 > models). If a voice is rejected during `setup`, the WebSocket closes
@@ -280,7 +306,8 @@ Voice + output language pinned to German:
 >   `setupComplete`).
 > - `speechConfig.languageCode` controls **output** TTS language; the
 >   **recognition** language for input audio is configured separately via
->   `inputAudioTranscription.languageCodes` (Google AI only).
+>   `inputAudioTranscription` (which on Gemini Enterprise is a
+>   presence-only flag; the recognition language is auto-detected).
 > - The Live API is **single-speaker only**. Multi-speaker TTS
 >   (`MultiSpeakerVoiceConfig`) is a feature of the standalone speech-generation
 >   `generateContent` API, not Live.
@@ -309,10 +336,9 @@ derived from VAD (or activity events).
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `mediaChunks[]` | repeated `Blob` | Combined audio/video chunks. Primary field on Gemini Enterprise raw WebSocket. |
-| `audio` | `Blob` | Typed realtime audio. PCM 16-bit, 16 kHz mono input. (Google AI raw WebSocket; SDKs on both backends accept this.) |
-| `video` | `Blob` | Typed realtime video frame (`image/jpeg`/`png`/`webp`). (Google AI raw WebSocket; SDKs on both backends accept this.) |
-| `text` | `string` | Realtime text input. **Google AI only.** |
+| `mediaChunks[]` | repeated `Blob` | Combined audio/video chunks. Primary field on the Gemini Enterprise raw WebSocket. |
+| `audio` | `Blob` | Typed realtime audio. PCM 16-bit, 16 kHz mono input. Accepted by Gemini Enterprise SDKs. |
+| `video` | `Blob` | Typed realtime video frame (`image/jpeg`/`png`/`webp`). Accepted by Gemini Enterprise SDKs. |
 | `audioStreamEnd` | `bool` | Mic turned off. Only valid with auto-VAD enabled. |
 | `activityStart` | `ActivityStart` (empty) | Only when auto-VAD is **disabled**. |
 | `activityEnd` | `ActivityEnd` (empty) | Only when auto-VAD is **disabled**. |
@@ -328,7 +354,7 @@ derived from VAD (or activity events).
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `functionResponses[]` | repeated `FunctionResponse` | Match `FunctionCall.id` from the server. **Google AI requires `id`**; Gemini Enterprise does not. |
+| `functionResponses[]` | repeated `FunctionResponse` | Match `FunctionCall.id` from the server (`id` is optional on Gemini Enterprise). |
 
 ---
 
@@ -396,8 +422,6 @@ with mimeType `audio/pcm;rate=24000`. Concatenate as they stream. On
 
 ### `UsageMetadata`
 
-**Gemini Enterprise (cached-content style):**
-
 | Field | Type |
 | --- | --- |
 | `totalTokenCount` | `int32` |
@@ -406,27 +430,11 @@ with mimeType `audio/pcm;rate=24000`. Concatenate as they stream. On
 | `videoDurationSeconds` | `int32` |
 | `audioDurationSeconds` | `int32` |
 
-**Google AI (per-response style):**
-
-| Field | Type |
-| --- | --- |
-| `promptTokenCount` | `int32` |
-| `cachedContentTokenCount` | `int32` |
-| `responseTokenCount` | `int32` |
-| `toolUsePromptTokenCount` | `int32` |
-| `thoughtsTokenCount` | `int32` |
-| `totalTokenCount` | `int32` |
-| `promptTokensDetails[]` | repeated `ModalityTokenCount` |
-| `cacheTokensDetails[]` | repeated `ModalityTokenCount` |
-| `responseTokensDetails[]` | repeated `ModalityTokenCount` |
-| `toolUsePromptTokensDetails[]` | repeated `ModalityTokenCount` |
-| `trafficType` | enum (`PAYG` \| `PROVISIONED_THROUGHPUT`) |
-
 ---
 
 ## 13. End-to-end JSON examples
 
-### Setup (Gemini Enterprise)
+### Setup
 
 ```json
 {
@@ -445,18 +453,6 @@ with mimeType `audio/pcm;rate=24000`. Concatenate as they stream. On
       "automaticActivityDetection": { "disabled": false }
     },
     "sessionResumption": {},
-    "outputAudioTranscription": {}
-  }
-}
-```
-
-### Setup (Google AI)
-
-```json
-{
-  "setup": {
-    "model": "models/gemini-2.0-flash-live-001",
-    "generationConfig": { "responseModalities": ["AUDIO"] },
     "outputAudioTranscription": {}
   }
 }
@@ -481,7 +477,8 @@ with mimeType `audio/pcm;rate=24000`. Concatenate as they stream. On
 }
 ```
 
-(Gemini Enterprise equivalent uses `mediaChunks: [...]` instead of `audio:`.)
+(Gemini Enterprise's raw WebSocket prefers `mediaChunks: [...]`; the
+typed `audio:` form above is accepted by the Gemini Enterprise SDKs.)
 
 ### Typed user message (turn-based)
 
@@ -564,15 +561,15 @@ There are **two distinct ways** to send user input. Pick one based on intent:
 | **Added to history?** | **No** (transient signals) | **Yes** (persistent conversation) |
 | **Turn boundary** | VAD (auto), or explicit `activityStart`/`End` | Explicit `turnComplete: true` |
 | **Effect on model** | Streamed; auto-triggers a turn when VAD fires | Setting `turnComplete` triggers generation; **interrupts** any ongoing model output |
-| **Field carriers** | `audio` / `video` / `text` (Google AI) or `mediaChunks[]` (Gemini Enterprise) | `turns[].parts[].text` / `inlineData` / `fileData` |
+| **Field carriers** | `mediaChunks[]` (raw WS) or typed `audio` / `video` (SDK form) | `turns[].parts[].text` / `inlineData` / `fileData` |
 | **Typical use** | Live voice + screen sharing, push-to-talk | Typed chat, uploading an image/clip, replaying history on resume |
 
 > You may use both in the same session — e.g. send a `clientContent` system
 > nudge once, then continue streaming `realtimeInput`. But within a single
 > logical user turn, pick one.
 
-The two parts below give every supported variant for **audio**, **video**,
-and **text** in each mode, for both Gemini Enterprise and Google AI.
+The two parts below give every supported variant for **audio**,
+**video**, and **text** on Gemini Enterprise.
 
 ---
 
@@ -588,7 +585,19 @@ Required format: **PCM, 16-bit signed, 16 kHz, mono, little-endian**, base64
 encoded. MIME type: `audio/pcm;rate=16000`. Send one frame per chunk
 (~20–100 ms is typical).
 
-### 1.A.1 Continuous mic — Google AI
+### 1.A.1 Continuous mic — `mediaChunks[]` (preferred on the raw WebSocket)
+
+```json
+{
+  "realtimeInput": {
+    "mediaChunks": [
+      { "mimeType": "audio/pcm;rate=16000", "data": "<base64 PCM chunk>" }
+    ]
+  }
+}
+```
+
+### 1.A.2 Continuous mic — typed `audio` (SDK form)
 
 ```json
 {
@@ -607,21 +616,7 @@ When the mic turns off (and server-side VAD is enabled), commit end-of-stream:
 { "realtimeInput": { "audioStreamEnd": true } }
 ```
 
-### 1.A.2 Continuous mic — Gemini Enterprise
-
-Gemini Enterprise uses the combined `mediaChunks[]` field:
-
-```json
-{
-  "realtimeInput": {
-    "mediaChunks": [
-      { "mimeType": "audio/pcm;rate=16000", "data": "<base64 PCM chunk>" }
-    ]
-  }
-}
-```
-
-### 1.A.3 Manual VAD (auto-VAD disabled) — both backends
+### 1.A.3 Manual VAD (auto-VAD disabled)
 
 Required `setup`:
 
@@ -650,7 +645,19 @@ screenshare, up to ~10 fps for camera). Each frame is JPEG / PNG / WebP. The
 model does **not** consume an encoded container (mp4/webm) — sample frames
 client-side and send each as an inline image.
 
-### 1.B.1 Continuous camera — Google AI
+### 1.B.1 Continuous camera — `mediaChunks[]`
+
+```json
+{
+  "realtimeInput": {
+    "mediaChunks": [
+      { "mimeType": "image/jpeg", "data": "<base64 JPEG frame>" }
+    ]
+  }
+}
+```
+
+### 1.B.2 Continuous camera — typed `video` (SDK form)
 
 ```json
 {
@@ -663,49 +670,14 @@ client-side and send each as an inline image.
 }
 ```
 
-### 1.B.2 Continuous camera — Gemini Enterprise
-
-```json
-{
-  "realtimeInput": {
-    "mediaChunks": [
-      { "mimeType": "image/jpeg", "data": "<base64 JPEG frame>" }
-    ]
-  }
-}
-```
-
 ## 1.C Realtime text
 
-### 1.C.1 — Google AI
+`realtimeInput.text` is **not supported** on Gemini Enterprise. To
+inject ad-hoc text during a live session, fall back to **Part 2**
+(`clientContent`) — note that sending `clientContent` will interrupt
+any ongoing model generation.
 
-```json
-{ "realtimeInput": { "text": "Switch to a calmer tone." } }
-```
-
-### 1.C.2 — Gemini Enterprise
-
-`realtimeInput.text` is **not supported** on Gemini Enterprise. To inject ad-hoc text
-during a live session, fall back to **Part 2** (`clientContent`) — note that
-sending `clientContent` will interrupt any ongoing model generation.
-
-## 1.D Combined realtime audio + video (+ text)
-
-Typical "talk-to-the-screen" flow.
-
-### 1.D.1 — Google AI
-
-```json
-{ "realtimeInput": { "video": { "mimeType": "image/jpeg",          "data": "<frame_t0>" } } }
-{ "realtimeInput": { "audio": { "mimeType": "audio/pcm;rate=16000", "data": "<pcm_t0>"   } } }
-{ "realtimeInput": { "video": { "mimeType": "image/jpeg",          "data": "<frame_t1>" } } }
-{ "realtimeInput": { "audio": { "mimeType": "audio/pcm;rate=16000", "data": "<pcm_t1>"   } } }
-{ "realtimeInput": { "text":  "Focus on the chart in the upper-right." } }
-{ "realtimeInput": { "audio": { "mimeType": "audio/pcm;rate=16000", "data": "<pcm_t2>"   } } }
-{ "realtimeInput": { "audioStreamEnd": true } }
-```
-
-### 1.D.2 — Gemini Enterprise
+## 1.D Combined realtime audio + video
 
 Audio + video can be combined in a single frame via `mediaChunks[]`:
 
@@ -730,13 +702,13 @@ Audio + video can be combined in a single frame via `mediaChunks[]`:
 
 ## 1.E Realtime quick reference
 
-| Modality | Google AI | Gemini Enterprise |
-| --- | --- | --- |
-| Audio chunk | `realtimeInput.audio` | `realtimeInput.mediaChunks[]` (`audio/pcm;rate=16000`) |
-| Video frame | `realtimeInput.video` | `realtimeInput.mediaChunks[]` (`image/jpeg`/`png`/`webp`) |
-| Text | `realtimeInput.text` | *(not supported — use Part 2)* |
-| Mic-off signal | `realtimeInput.audioStreamEnd: true` | *(implicit on silence)* |
-| Manual turn boundary | `realtimeInput.activityStart` / `activityEnd` (auto-VAD disabled) | same |
+| Modality | Field |
+| --- | --- |
+| Audio chunk | `realtimeInput.mediaChunks[]` (`audio/pcm;rate=16000`) or typed `realtimeInput.audio` (SDK form) |
+| Video frame | `realtimeInput.mediaChunks[]` (`image/jpeg`/`png`/`webp`) or typed `realtimeInput.video` (SDK form) |
+| Text | *(not supported — use Part 2 `clientContent`)* |
+| Mic-off signal | `realtimeInput.audioStreamEnd: true` |
+| Manual turn boundary | `realtimeInput.activityStart` / `activityEnd` (auto-VAD disabled) |
 
 ---
 
@@ -881,30 +853,6 @@ A pre-recorded clip delivered as a discrete history-bearing turn.
 }
 ```
 
-### 2.C.4 Image by URI (`fileData`) — Google AI
-
-Upload via the Files API first, then reference the returned URI:
-
-```json
-{
-  "clientContent": {
-    "turns": [{
-      "role": "user",
-      "parts": [
-        { "text": "Describe this image." },
-        {
-          "fileData": {
-            "mimeType": "image/jpeg",
-            "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/abc-123"
-          }
-        }
-      ]
-    }],
-    "turnComplete": true
-  }
-}
-```
-
 ## 2.D Combined add-context multimodal turn
 
 Text + image + audio in a single user turn:
@@ -932,29 +880,28 @@ Text + image + audio in a single user turn:
 | Text | `turns[].parts[].text` | One or more `text` parts per turn. |
 | Inline audio | `turns[].parts[].inlineData` (`audio/pcm;rate=16000`) | Full clip, base64. |
 | Inline image / video frame | `turns[].parts[].inlineData` (`image/jpeg`/`png`/`webp`) | Multiple parts allowed for sampled clips. |
-| Remote file | `turns[].parts[].fileData` (`fileUri`) | Gemini Enterprise: GCS URI. Google AI: Files-API URI. |
+| Remote file | `turns[].parts[].fileData` (`fileUri`) | GCS URI on Gemini Enterprise. |
 | Trigger generation | `turnComplete: true` | Omit to keep streaming more parts. |
 | History order | `turns[]` ordered oldest → newest | `role` is `"user"` or `"model"`. |
 
 ---
 
-## 15. Gemini Enterprise vs Google AI differences
+## 15. Gemini Enterprise summary
 
-| Area | Gemini Enterprise | Google AI |
-| --- | --- | --- |
-| Type prefix | `BidiGenerateContent*` | `LiveClient*` / `LiveServer*` (wire types still `BidiGenerateContent*`) |
-| Endpoint host | `{location}-aiplatform.googleapis.com` (or global) | `generativelanguage.googleapis.com` |
-| Service path | `google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent` | `google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent` |
-| Auth | OAuth Bearer (ADC) or Express-mode API key | API key query param; ephemeral `Authorization: Token` against `BidiGenerateContentConstrained` (v1alpha) |
-| `model` format | `projects/{p}/locations/{l}/publishers/google/models/{m}` | `models/{m}` |
-| `FunctionResponse.id` | Optional | **Required** |
-| `AudioTranscriptionConfig` | Empty | `{ languageCodes?: string[] }` |
-| `realtimeInput` raw-WS shape | Primary field is `mediaChunks[]` | Typed fields `audio` / `video` / `text` / `audioStreamEnd` |
-| `realtimeInput.text` | Not supported (use `clientContent`) | Supported |
-| Default `turnCoverage` | `TURN_INCLUDES_ALL_INPUT` | `TURN_INCLUDES_ONLY_ACTIVITY` |
-| `UsageMetadata` shape | Cached-content counters (`totalTokenCount`, `textCount`, `imageCount`, `videoDurationSeconds`, `audioDurationSeconds`) | Per-response counters with modality details and `trafficType` |
-| `ProactivityConfig` (`proactiveAudio`) | Not present | Supported |
-| Default API version | `v1beta1` (also `v1`) | `v1beta` (also `v1alpha` for ephemeral tokens) |
+| Area | Value |
+| --- | --- |
+| Type prefix | `BidiGenerateContent*` |
+| Endpoint host | `{location}-aiplatform.googleapis.com` (or `aiplatform.googleapis.com` for global) |
+| Service path | `google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent` |
+| Auth | OAuth Bearer (Application Default Credentials) |
+| `model` format | `projects/{p}/locations/{l}/publishers/google/models/{m}` |
+| `FunctionResponse.id` | Optional |
+| `AudioTranscriptionConfig` | Empty (presence-only flag) |
+| `realtimeInput` raw-WS shape | Primary field is `mediaChunks[]`; typed `audio`/`video` are accepted by the SDKs |
+| `realtimeInput.text` | Not supported (use `clientContent`) |
+| Default `turnCoverage` | `TURN_INCLUDES_ALL_INPUT` |
+| `UsageMetadata` shape | `totalTokenCount`, `textCount`, `imageCount`, `videoDurationSeconds`, `audioDurationSeconds` |
+| Default API version | `v1beta1` (also `v1`) |
 
 ---
 
@@ -966,9 +913,8 @@ Text + image + audio in a single user turn:
 - **Ignoring `interrupted: true`** — leftover queued audio will play over the
   user's next utterance.
 - **Replying to `toolCall` with `clientContent`** — must be `toolResponse`.
-- **Forgetting `FunctionResponse.id` on Google AI** — request rejected.
 - **Wrong audio format** — input must be 16 kHz PCM, output is 24 kHz PCM.
 - **No reconnect handling** — sessions have a max duration; always honor
   `goAway` and persist the latest `SessionResumptionUpdate.newHandle`.
-- **Wrong model-name format** between Gemini Enterprise (`projects/.../models/...`) and
-  Google AI (`models/...`).
+- **Wrong model-name format** — must be the fully-qualified Vertex AI
+  resource path (`projects/.../publishers/google/models/...`).
